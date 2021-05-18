@@ -2,63 +2,67 @@
 
 from __future__ import print_function
 
-import argparse
+import configargparse
+import shutil
 import torch
-import pickle 
 import numpy as np 
 import os 
 import math 
-import random 
-import sys
-import matplotlib.pyplot as plt 
 import data
-import scipy.io
 
-from torch import nn, optim
+from torch import optim
 from torch.nn import functional as F
 
 from etm import ETM
 from utils import nearest_neighbors, get_topic_coherence, get_topic_diversity
 
-parser = argparse.ArgumentParser(description='The Embedded Topic Model')
+parser = configargparse.ArgParser(
+                description="parse args for The Embedded Topic Model",
+                        config_file_parser_class=configargparse.YAMLConfigFileParser
+                            )
+#parser = configargparse.ArgumentParser(description='The Embedded Topic Model')
+
+parser.add("-c", "--config", is_config_file=True, default=None)
 
 ### data and file related arguments
-parser.add_argument('--dataset', type=str, default='20ng', help='name of corpus')
-parser.add_argument('--data_path', type=str, default='data/20ng', help='directory containing data')
-parser.add_argument('--emb_path', type=str, default='data/20ng_embeddings.txt', help='directory containing word embeddings')
-parser.add_argument('--save_path', type=str, default='./results', help='path to save results')
-parser.add_argument('--batch_size', type=int, default=1000, help='input batch size for training')
+#parser.add('--dataset', type=str, default='20ng', help='name of corpus')
+parser.add('--data_path', type=str, default=None, help='directory containing data')
+parser.add('--emb_path', type=str, default='embeddings.txt', help='file name of word embeddings')
+parser.add('--output_dir', type=str, default='./results', help='path to save results')
+parser.add("--temp_output_dir", default=None, help="Temporary model storage during run, when I/O bound")
+parser.add('--batch_size', type=int, default=1000, help='input batch size for training')
 
 ### model-related arguments
-parser.add_argument('--num_topics', type=int, default=50, help='number of topics')
-parser.add_argument('--rho_size', type=int, default=300, help='dimension of rho')
-parser.add_argument('--emb_size', type=int, default=300, help='dimension of embeddings')
-parser.add_argument('--t_hidden_size', type=int, default=800, help='dimension of hidden space of q(theta)')
-parser.add_argument('--theta_act', type=str, default='relu', help='tanh, softplus, relu, rrelu, leakyrelu, elu, selu, glu)')
-parser.add_argument('--train_embeddings', type=int, default=0, help='whether to fix rho or train it')
+parser.add('--num_topics', type=int, default=50, help='number of topics')
+parser.add('--rho_size', type=int, default=300, help='dimension of rho')
+parser.add('--emb_size', type=int, default=300, help='dimension of embeddings')
+parser.add('--t_hidden_size', type=int, default=800, help='dimension of hidden space of q(theta)')
+parser.add('--theta_act', type=str, default='relu', help='tanh, softplus, relu, rrelu, leakyrelu, elu, selu, glu)')
+parser.add('--train_embeddings', type=int, default=1, help='whether to fix rho or train it')
 
 ### optimization-related arguments
-parser.add_argument('--lr', type=float, default=0.005, help='learning rate')
-parser.add_argument('--lr_factor', type=float, default=4.0, help='divide learning rate by this...')
-parser.add_argument('--epochs', type=int, default=20, help='number of epochs to train...150 for 20ng 100 for others')
-parser.add_argument('--mode', type=str, default='train', help='train or eval model')
-parser.add_argument('--optimizer', type=str, default='adam', help='choice of optimizer')
-parser.add_argument('--seed', type=int, default=2019, help='random seed (default: 1)')
-parser.add_argument('--enc_drop', type=float, default=0.0, help='dropout rate on encoder')
-parser.add_argument('--clip', type=float, default=0.0, help='gradient clipping')
-parser.add_argument('--nonmono', type=int, default=10, help='number of bad hits allowed')
-parser.add_argument('--wdecay', type=float, default=1.2e-6, help='some l2 regularization')
-parser.add_argument('--anneal_lr', type=int, default=0, help='whether to anneal the learning rate or not')
-parser.add_argument('--bow_norm', type=int, default=1, help='normalize the bows or not')
+parser.add('--lr', type=float, default=0.005, help='learning rate')
+parser.add('--lr_factor', type=float, default=4.0, help='divide learning rate by this...')
+parser.add('--epochs', type=int, default=20, help='number of epochs to train...150 for 20ng 100 for others')
+parser.add('--mode', type=str, default='train', help='train or eval model')
+parser.add('--optimizer', type=str, default='adam', help='choice of optimizer')
+parser.add('--seed', type=int, default=2019, help='random seed (default: 1)')
+parser.add('--enc_drop', type=float, default=0.0, help='dropout rate on encoder')
+parser.add('--clip', type=float, default=0.0, help='gradient clipping')
+parser.add('--nonmono', type=int, default=10, help='number of bad hits allowed')
+parser.add('--wdecay', type=float, default=1.2e-6, help='some l2 regularization')
+parser.add('--anneal_lr', type=int, default=0, help='whether to anneal the learning rate or not')
+parser.add('--bow_norm', type=int, default=1, help='normalize the bows or not')
 
 ### evaluation, visualization, and logging-related arguments
-parser.add_argument('--num_words', type=int, default=10, help='number of words for topic viz')
-parser.add_argument('--log_interval', type=int, default=2, help='when to log training')
-parser.add_argument('--visualize_every', type=int, default=10, help='when to visualize results')
-parser.add_argument('--eval_batch_size', type=int, default=1000, help='input batch size for evaluation')
-parser.add_argument('--load_from', type=str, default='', help='the name of the ckpt to eval from')
-parser.add_argument('--tc', type=int, default=0, help='whether to compute topic coherence or not')
-parser.add_argument('--td', type=int, default=0, help='whether to compute topic diversity or not')
+parser.add('--num_words', type=int, default=10, help='number of words for topic viz')
+parser.add('--topic_words_to_save', type=int, default=50, help='number of top topic words to save')
+parser.add('--log_interval', type=int, default=2, help='when to log training')
+parser.add('--visualize_every', type=int, default=10, help='when to visualize results')
+parser.add('--eval_batch_size', type=int, default=1000, help='input batch size for evaluation')
+parser.add('--load_from', type=str, default='', help='the name of the ckpt to eval from')
+parser.add('--tc', type=int, default=0, help='whether to compute topic coherence or not')
+parser.add('--td', type=int, default=0, help='whether to compute topic diversity or not')
 
 args = parser.parse_args()
 
@@ -73,6 +77,7 @@ if torch.cuda.is_available():
 ## get data
 # 1. vocabulary
 vocab, train, valid, test = data.get_data(os.path.join(args.data_path))
+#vocab, train, valid = data.get_data(os.path.join(args.data_path))
 vocab_size = len(vocab)
 args.vocab_size = vocab_size
 
@@ -98,8 +103,8 @@ test_2_counts = test['counts_2']
 args.num_docs_test_2 = len(test_2_tokens)
 
 embeddings = None
+emb_path = os.path.join(args.data_path, args.emb_path)
 if not args.train_embeddings:
-    emb_path = args.emb_path
     vect_path = os.path.join(args.data_path.split('/')[0], 'embeddings.pkl')   
     vectors = {}
     with open(emb_path, 'rb') as f:
@@ -121,19 +126,28 @@ if not args.train_embeddings:
     args.embeddings_dim = embeddings.size()
 
 print('=*'*100)
-print('Training an Embedded Topic Model on {} with the following settings: {}'.format(args.dataset.upper(), args))
+print('Training an Embedded Topic Model with the following settings: {}'.format(args))
 print('=*'*100)
 
 ## define checkpoint
-if not os.path.exists(args.save_path):
-    os.makedirs(args.save_path)
+if not os.path.exists(args.output_dir):
+    os.makedirs(args.output_dir)
+    #os.makedirs(os.path.join(args.output_dir, str(seed)))
+    os.makedirs(os.path.join(args.output_dir, 'topics'))
+output_dir = args.output_dir    
+run_dir = args.output_dir
+if args.temp_output_dir:
+    run_dir = os.path.join(args.temp_output_dir, str(np.random.randint(1000)))
+if not os.path.exists(run_dir):
+    os.makedirs(run_dir)
+    os.makedirs(os.path.join(run_dir, 'topics'))
 
 if args.mode == 'eval':
     ckpt = args.load_from
 else:
-    ckpt = os.path.join(args.save_path, 
-        'etm_{}_K_{}_Htheta_{}_Optim_{}_Clip_{}_ThetaAct_{}_Lr_{}_Bsz_{}_RhoSize_{}_trainEmbeddings_{}'.format(
-        args.dataset, args.num_topics, args.t_hidden_size, args.optimizer, args.clip, args.theta_act, 
+    ckpt = os.path.join(run_dir, 
+        'etm_K_{}_Htheta_{}_Optim_{}_Clip_{}_ThetaAct_{}_Lr_{}_Bsz_{}_RhoSize_{}_trainEmbeddings_{}'.format(
+        args.num_topics, args.t_hidden_size, args.optimizer, args.clip, args.theta_act, 
             args.lr, args.batch_size, args.rho_size, args.train_embeddings))
 
 ## define model and optimizer
@@ -236,7 +250,23 @@ def visualize(m, show_emb=True):
                     word, nearest_neighbors(word, embeddings, vocab)))
             print('#'*100)
 
-def evaluate(m, source, tc=False, td=False):
+def save_topics(m, epoch_num, final=0):
+    m.eval()
+    with torch.no_grad():
+        if final:
+            f = open(os.path.join(run_dir, 'topics.txt'), 'w')
+        else:
+            f = open(os.path.join(run_dir, 'topics/' + str(epoch_num) + '.txt'), 'w')
+        gammas = m.get_beta()
+        for k in range(args.num_topics):
+            gamma = gammas[k]
+            top_words = list(gamma.cpu().numpy().argsort()[-args.topic_words_to_save:][::-1])
+            topic_words = [vocab[a] for a in top_words]
+            f.write(' '.join(topic_words))
+            f.write('\n')
+        f.close()
+
+def evaluate(m, source='val', tc=False, td=False):
     """Compute perplexity on document completion.
     """
     m.eval()
@@ -305,11 +335,13 @@ if args.mode == 'train':
     for epoch in range(1, args.epochs):
         train(epoch)
         val_ppl = evaluate(model, 'val')
+        save_topics(model, epoch)
         if val_ppl < best_val_ppl:
             with open(ckpt, 'wb') as f:
                 torch.save(model, f)
             best_epoch = epoch
             best_val_ppl = val_ppl
+            save_topics(model, epoch, final=1)
         else:
             ## check whether to anneal lr
             lr = optimizer.param_groups[0]['lr']
@@ -322,59 +354,63 @@ if args.mode == 'train':
         model = torch.load(f)
     model = model.to(device)
     val_ppl = evaluate(model, 'val')
-else:   
-    with open(ckpt, 'rb') as f:
-        model = torch.load(f)
-    model = model.to(device)
-    model.eval()
+    
+    if args.temp_output_dir:
+        shutil.copytree(run_dir, output_dir, dirs_exist_ok=True)
+        shutil.rmtree(run_dir)
+#else:   
+    #with open(ckpt, 'rb') as f:
+        #model = torch.load(f)
+    #model = model.to(device)
+    #model.eval()
 
-    with torch.no_grad():
+    #with torch.no_grad():
         ## get document completion perplexities
-        test_ppl = evaluate(model, 'test', tc=args.tc, td=args.td)
+        #test_ppl = evaluate(model, 'test', tc=args.tc, td=args.td)
 
         ## get most used topics
-        indices = torch.tensor(range(args.num_docs_train))
-        indices = torch.split(indices, args.batch_size)
-        thetaAvg = torch.zeros(1, args.num_topics).to(device)
-        thetaWeightedAvg = torch.zeros(1, args.num_topics).to(device)
-        cnt = 0
-        for idx, ind in enumerate(indices):
-            data_batch = data.get_batch(train_tokens, train_counts, ind, args.vocab_size, device)
-            sums = data_batch.sum(1).unsqueeze(1)
-            cnt += sums.sum(0).squeeze().cpu().numpy()
-            if args.bow_norm:
-                normalized_data_batch = data_batch / sums
-            else:
-                normalized_data_batch = data_batch
-            theta, _ = model.get_theta(normalized_data_batch)
-            thetaAvg += theta.sum(0).unsqueeze(0) / args.num_docs_train
-            weighed_theta = sums * theta
-            thetaWeightedAvg += weighed_theta.sum(0).unsqueeze(0)
-            if idx % 100 == 0 and idx > 0:
-                print('batch: {}/{}'.format(idx, len(indices)))
-        thetaWeightedAvg = thetaWeightedAvg.squeeze().cpu().numpy() / cnt
-        print('\nThe 10 most used topics are {}'.format(thetaWeightedAvg.argsort()[::-1][:10]))
+        #indices = torch.tensor(range(args.num_docs_train))
+        #indices = torch.split(indices, args.batch_size)
+        #thetaAvg = torch.zeros(1, args.num_topics).to(device)
+        #thetaWeightedAvg = torch.zeros(1, args.num_topics).to(device)
+        #cnt = 0
+        #for idx, ind in enumerate(indices):
+            #data_batch = data.get_batch(train_tokens, train_counts, ind, args.vocab_size, device)
+            #sums = data_batch.sum(1).unsqueeze(1)
+            #cnt += sums.sum(0).squeeze().cpu().numpy()
+            #if args.bow_norm:
+                #normalized_data_batch = data_batch / sums
+            #else:
+                #normalized_data_batch = data_batch
+            #theta, _ = model.get_theta(normalized_data_batch)
+            #thetaAvg += theta.sum(0).unsqueeze(0) / args.num_docs_train
+            #weighed_theta = sums * theta
+            #thetaWeightedAvg += weighed_theta.sum(0).unsqueeze(0)
+            #if idx % 100 == 0 and idx > 0:
+                #print('batch: {}/{}'.format(idx, len(indices)))
+        #thetaWeightedAvg = thetaWeightedAvg.squeeze().cpu().numpy() / cnt
+        #print('\nThe 10 most used topics are {}'.format(thetaWeightedAvg.argsort()[::-1][:10]))
 
         ## show topics
-        beta = model.get_beta()
-        topic_indices = list(np.random.choice(args.num_topics, 10)) # 10 random topics
-        print('\n')
-        for k in range(args.num_topics):#topic_indices:
-            gamma = beta[k]
-            top_words = list(gamma.cpu().numpy().argsort()[-args.num_words+1:][::-1])
-            topic_words = [vocab[a] for a in top_words]
-            print('Topic {}: {}'.format(k, topic_words))
+        #beta = model.get_beta()
+        #topic_indices = list(np.random.choice(args.num_topics, 10)) # 10 random topics
+        #print('\n')
+        #for k in range(args.num_topics):#topic_indices:
+            #gamma = beta[k]
+            #top_words = list(gamma.cpu().numpy().argsort()[-args.num_words+1:][::-1])
+            #topic_words = [vocab[a] for a in top_words]
+            #print('Topic {}: {}'.format(k, topic_words))
 
-        if args.train_embeddings:
+        #if args.train_embeddings:
             ## show etm embeddings 
-            try:
-                rho_etm = model.rho.weight.cpu()
-            except:
-                rho_etm = model.rho.cpu()
-            queries = ['andrew', 'woman', 'computer', 'sports', 'religion', 'man', 'love', 
-                            'intelligence', 'money', 'politics', 'health', 'people', 'family']
-            print('\n')
-            print('ETM embeddings...')
-            for word in queries:
-                print('word: {} .. etm neighbors: {}'.format(word, nearest_neighbors(word, rho_etm, vocab)))
-            print('\n')
+            #try:
+                #rho_etm = model.rho.weight.cpu()
+            #except:
+                #rho_etm = model.rho.cpu()
+            #queries = ['andrew', 'woman', 'computer', 'sports', 'religion', 'man', 'love', 
+                            #'intelligence', 'money', 'politics', 'health', 'people', 'family']
+            #print('\n')
+            #print('ETM embeddings...')
+            #for word in queries:
+                #print('word: {} .. etm neighbors: {}'.format(word, nearest_neighbors(word, rho_etm, vocab)))
+            #print('\n')
