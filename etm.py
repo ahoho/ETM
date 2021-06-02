@@ -9,7 +9,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ETM(nn.Module):
     def __init__(self, num_topics, vocab_size, t_hidden_size, rho_size, emsize, 
-                    theta_act, embeddings=None, train_embeddings=True, enc_drop=0.5):
+                    theta_act, embeddings=None, train_embeddings=True, update_embeddings=False, enc_drop=0.5):
         super(ETM, self).__init__()
 
         ## define hyperparameters
@@ -26,6 +26,9 @@ class ETM(nn.Module):
         ## define the word embedding matrix \rho
         if train_embeddings:
             self.rho = nn.Linear(rho_size, vocab_size, bias=False)
+            if update_embeddings:
+                with torch.no_grad():
+                    self.rho.weight.copy_(embeddings)
         else:
             num_embeddings, emsize = embeddings.size()
             rho = nn.Embedding(num_embeddings, emsize)

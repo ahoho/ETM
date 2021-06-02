@@ -28,7 +28,7 @@ if __name__ == "__main__":
     ### data and file related arguments
     #parser.add('--dataset', type=str, default='20ng', help='name of corpus')
     parser.add('--data_path', type=str, default=None, help='directory containing data')
-    parser.add('--emb_path', type=str, default='embeddings.txt', help='file name of word embeddings')
+    parser.add('--emb_path', type=str, default='embeddings_full.txt', help='file name of word embeddings')
     parser.add('--output_dir', type=str, default='./results', help='path to save results')
     parser.add("--temp_output_dir", default=None, help="Temporary model storage during run, when I/O bound")
     parser.add('--batch_size', type=int, default=1000, help='input batch size for training')
@@ -39,7 +39,8 @@ if __name__ == "__main__":
     parser.add('--emb_size', type=int, default=300, help='dimension of embeddings')
     parser.add('--t_hidden_size', type=int, default=800, help='dimension of hidden space of q(theta)')
     parser.add('--theta_act', type=str, default='relu', help='tanh, softplus, relu, rrelu, leakyrelu, elu, selu, glu)')
-    parser.add('--train_embeddings', type=int, default=1, help='whether to fix rho or train it')
+    parser.add('--train_embeddings', type=int, default=0, help='whether to fix rho or train it')
+    parser.add('--update_embeddings', type=int, default=0, help='whether to fix initialized embs or update them during training')
 
     ### optimization-related arguments
     parser.add('--lr', type=float, default=0.005, help='learning rate')
@@ -153,7 +154,7 @@ if __name__ == "__main__":
 
     ## define model and optimizer
     model = ETM(args.num_topics, vocab_size, args.t_hidden_size, args.rho_size, args.emb_size, 
-                    args.theta_act, embeddings, args.train_embeddings, args.enc_drop).to(device)
+                    args.theta_act, embeddings, args.train_embeddings, args.update_embeddings, args.enc_drop).to(device)
 
     print('model: {}'.format(model))
 
@@ -342,7 +343,7 @@ if __name__ == "__main__":
                     torch.save(model, f)
                 best_epoch = epoch
                 best_val_ppl = val_ppl
-                save_topics(model, epoch, final=1)
+                #save_topics(model, epoch, final=1)
             else:
                 ## check whether to anneal lr
                 lr = optimizer.param_groups[0]['lr']
