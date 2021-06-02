@@ -8,6 +8,7 @@ import itertools
 from scipy.io import savemat, loadmat
 import re
 import string
+import os
 
 # Maximum / minimum document frequency
 max_df = 0.7
